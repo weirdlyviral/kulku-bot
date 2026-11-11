@@ -95,7 +95,8 @@ async function kulku(env, method, path, body, retried = false) {
     throw new Error(auto ? "Kulku rejected the login." : "Kulku login expired — update the KULKU_TOKEN secret (or set KULKU_PHONE + KULKU_PASSWORD for auto-login).");
   }
   if (!r.ok) throw new Error(`Kulku ${r.status}: ${text.slice(0, 300)}`);
-  return text ? JSON.parse(text) : null;
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return text; } // e.g. booking returns the new id as plain text
 }
 
 // Spaces list is big and rarely changes: cache per worker instance for 10 min.

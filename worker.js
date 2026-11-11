@@ -1,5 +1,6 @@
 // Kulku laundry/sauna Telegram bot — Cloudflare Worker (webhook).
-// Secrets: BOT_TOKEN, KULKU_USER, KULKU_TOKEN, WEBHOOK_SECRET, ALLOWED_CHAT_ID
+// Secrets: BOT_TOKEN, WEBHOOK_SECRET, ALLOWED_CHAT_ID, and either
+//   KULKU_PHONE + KULKU_PASSWORD (auto-login, recommended) or KULKU_USER + KULKU_TOKEN.
 // Optional var: SITE (e.g. "Jämeräntaival 1") to skip the building picker.
 
 const API = "https://portal.kulku.io/api/v2/";
@@ -66,14 +67,33 @@ async function handle(u, env) {
 }
 
 // ---------- Kulku ----------
-async function kulku(env, method, path, body) {
+// Auth: if KULKU_PHONE + KULKU_PASSWORD are set, the bot logs in by itself and
+// re-logs in whenever the session expires. Otherwise it uses KULKU_USER + KULKU_TOKEN.
+let session = null;
+async function login(env) {
+  const r = await fetch(API + "login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: env.KULKU_PHONE, password: env.KULKU_PASSWORD }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!j?.data?.authToken) throw new Error("Kulku login failed — check KULKU_PHONE / KULKU_PASSWORD.");
+  session = { user: j.data.userId, token: j.data.authToken };
+}
+async function kulku(env, method, path, body, retried = false) {
+  const auto = env.KULKU_PHONE && env.KULKU_PASSWORD;
+  if (auto && !session) await login(env);
+  const s = auto ? session : { user: env.KULKU_USER, token: env.KULKU_TOKEN };
   const r = await fetch(API + path, {
     method,
-    headers: { "content-type": "application/json", "x-Auth-Token": env.KULKU_TOKEN, "x-User-Id": env.KULKU_USER },
+    headers: { "content-type": "application/json", "x-Auth-Token": s.token, "x-User-Id": s.user },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
-  if (r.status === 401 || r.status === 403) throw new Error("Kulku login expired — update the KULKU_TOKEN secret.");
+  if (r.status === 401 || r.status === 403) {
+    if (auto && !retried) { session = null; return kulku(env, method, path, body, true); }
+    throw new Error(auto ? "Kulku rejected the login." : "Kulku login expired — update the KULKU_TOKEN secret (or set KULKU_PHONE + KULKU_PASSWORD for auto-login).");
+  }
   if (!r.ok) throw new Error(`Kulku ${r.status}: ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : null;
 }
@@ -211,7 +231,6 @@ async function book(env, spaceId, ymd, t) {
     const v = await dayView(env, sp.parent || sp.id, ymd);
     return { ...v, text: "⚠️ That slot was just taken.\n\n" + v.text };
   }
-  await kulku(env, "GET", `payments/responseValidation?&spaceId=${spaceId}`);
   await kulku(env, "POST", "new/space/book", {
     spaceId, bookingStart: `${ymd}T${hm(t)}:00`, bookingEnd: `${ymd}T${hm(t + len)}:00`, checkoutData: "",
   });

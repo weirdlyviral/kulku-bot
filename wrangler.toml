@@ -1,0 +1,7 @@
+name = "kulku-bot"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+# Only show your building's spaces. Leave empty ("") to show all.
+SITE = ""
